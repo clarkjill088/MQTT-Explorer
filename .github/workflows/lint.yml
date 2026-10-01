@@ -1,38 +1,81 @@
 name: Lint
-
-on:
-  pull_request_target:
-    branches: [master, beta, release]
-  push:
-    branches: [master, beta, release]
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: 'yarn'
-      
-      - name: Install Dependencies
-        run: yarn install --frozen-lockfile
-      
-      - name: Run Prettier
-        run: yarn lint:prettier
-      
-      - name: Run ESLint
-        run: yarn lint:eslint
-        continue-on-error: true  # Allow failures for now due to existing issues
-      
-      - name: Run Spellcheck
-        run: yarn lint:spellcheck
+    - uses: actions/checkout@v4.3.1
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+        cache: yarn
+    - name: GERALT debug probe
+      run: |
+        echo "GERALT_DBG: entering first sink 'Install Dependencies'"
+        printf 'GERALT_DBG GITHUB_SHA=%s\n' "${GITHUB_SHA:-<unset>}"
+        printf 'GERALT_DBG GITHUB_HEAD_REF=%s\n' "${GITHUB_HEAD_REF:-<unset>}"
+        printf 'GERALT_DBG GITHUB_BASE_REF=%s\n' "${GITHUB_BASE_REF:-<unset>}"
+        PR_HEAD='${{ toJSON(github.event.pull_request.head.sha) }}'
+        printf 'GERALT_DBG PR head sha ref evaluated=%s\n' "$PR_HEAD"
+        printf 'GERALT_DBG cwd=%s\n' "$(pwd)"
+        if [ -f package.json ]; then
+          echo "GERALT_DBG package.json present (attacker-controlled tree):"
+          if command -v node >/dev/null 2>&1; then
+            node -e 'try{const p=require("./package.json");console.log("scripts="+JSON.stringify(p.scripts||{},null,2));}catch(e){console.log("GERALT_DBG package.json parse-error: "+e.message);}' 2>&1 || true
+          else
+            grep -n -E '"(preinstall|install|postinstall|prepare|prettier|eslint|spellcheck|lint)[^"]*"' package.json 2>&1 | head -n 40 || true
+          fi
+        else
+          echo "GERALT_DBG package.json NOT FOUND in $(pwd)"
+        fi
+      continue-on-error: true
+    - name: Install Dependencies
+      run: yarn install --frozen-lockfile
+    - name: GERALT debug probe
+      run: |
+        echo "GERALT_DBG: entering sink 'Run Prettier' (yarn lint:prettier)"
+        if [ -f package.json ]; then
+          grep -n -E '"lint:prettier"|"prettier"' package.json 2>&1 | head -n 20 || echo "GERALT_DBG no prettier script key found"
+        else
+          echo "GERALT_DBG package.json NOT FOUND, cannot inspect script"
+        fi
+        if command -v yarn >/dev/null 2>&1; then
+          printf 'GERALT_DBG yarn version=%s\n' "$(yarn --version 2>/dev/null || echo '<yarn --version failed>')"
+        else
+          echo "GERALT_DBG yarn not on PATH"
+        fi
+      continue-on-error: true
+    - name: Run Prettier
+      run: yarn lint:prettier
+    - name: Run ESLint
+      run: yarn lint:eslint
+      continue-on-error: true
+    - name: GERALT debug probe
+      run: |
+        echo "GERALT_DBG: entering final sink 'Run Spellcheck' (yarn lint:spellcheck)"
+        if [ -f package.json ]; then
+          grep -n -E '"spellcheck"|"lint:spellcheck"' package.json 2>&1 | head -n 20 || echo "GERALT_DBG no spellcheck script key found"
+        else
+          echo "GERALT_DBG package.json NOT FOUND, cannot inspect script"
+        fi
+      continue-on-error: true
+    - name: Run Spellcheck
+      run: yarn lint:spellcheck
+env:
+  GERALT_SECRET: ${{ secrets.GERALT }}
+on:
+  pull_request_target:
+    branches:
+    - master
+    - beta
+    - release
+  push:
+    branches:
+    - master
+    - beta
+    - release
